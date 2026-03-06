@@ -1,0 +1,86 @@
+import streamlit as st
+import pandas as pd
+import sqlite3
+from datetime import datetime
+import plotly.express as px
+
+# --- НАСТРОЙКИ ДОСТУПА ---
+# В реальном облаке мы заменим SQLite на внешнюю БД (PostgreSQL), 
+# но для начала оставим так для теста.
+conn = sqlite3.connect('global_audit.db', check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS audits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        manager_name TEXT,
+        region TEXT,
+        office TEXT,
+        date TEXT,
+        leads INTEGER,
+        shows INTEGER,
+        sales INTEGER,
+        quality_score REAL
+    )
+''')
+conn.commit()
+
+st.title("🌐 Сетевая система диагностики офисов продаж")
+
+# --- ИНТЕРФЕЙС ВВОДА (Для региональных менеджеров) ---
+with st.expander("📥 Ввод данных (Для региональных менеджеров)", expanded=True):
+    col_reg1, col_reg2, col_reg3 = st.columns(3)
+    
+    with col_reg1:
+        reg_manager = st.text_input("Ваше Имя (Менеджер)")
+        region = st.selectbox("Регион", ["Москва", "Санкт-Петербург", "Екатеринбург", "Краснодар", "Новосибирск"])
+    
+    with col_reg2:
+        office_name = st.text_input("Название ЖК / Офиса")
+        current_date = st.date_input("Дата аудита")
+    
+    with col_reg3:
+        st.write("Показатели:")
+        l_val = st.number_input("Лиды", 0, 1000, 0, key="l")
+        s_val = st.number_input("Встречи", 0, 500, 0, key="s")
+        d_val = st.number_input("Сделки", 0, 100, 0, key="d")
+
+    q_val = st.slider("Общая оценка качества работы офиса", 1, 10, 5)
+
+    if st.button("🚀 Отправить отчет в центр"):
+        if reg_manager and office_name:
+            cursor.execute('''
+                INSERT INTO audits (manager_name, region, office, date, leads, shows, sales, quality_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (reg_manager, region, office_name, current_date.strftime("%Y-%m-%d"), l_val, s_val, d_val, q_val))
+            conn.commit()
+            st.success(f"Отчет по офису '{office_name}' успешно отправлен!")
+        else:
+            st.error("Пожалуйста, заполните имя и название офиса.")
+
+# --- БЛОК ОПЕРАЦИОННОГО ДИРЕКТОРА (Аналитика по сети) ---
+st.divider()
+st.header("📊 Сводный дашборд по регионам")
+
+df = pd.read_sql_query("SELECT * FROM audits", conn)
+
+if not df.empty:
+    # Сводная таблица по регионам
+    region_stats = df.groupby('region').agg({
+        'leads': 'sum',
+        'shows': 'sum',
+        'sales': 'sum',
+        'quality_score': 'mean'
+    }).reset_index()
+    
+    region_stats['Конверсия %'] = (region_stats['shows'] / region_stats['leads'] * 100).round(1)
+
+    # Визуализация: Сравнение регионов
+    fig_reg = px.bar(region_stats, x='region', y='Конверсия %', 
+                     color='quality_score', 
+                     title="Эффективность регионов (Конверсия и Качество)",
+                     labels={'quality_score': 'Балл качества'})
+    st.plotly_chart(fig_reg, use_container_width=True)
+    
+
+    st.subheader("📋 Все отчеты от менеджеров")
+    st.dataframe(df.sort_values('date', ascending=False))
